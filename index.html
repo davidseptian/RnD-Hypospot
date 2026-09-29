@@ -63,7 +63,7 @@ select{appearance:auto}
 <header>
   <h1>Hypospot R&amp;D Pipeline<small>Riwayat, percobaan, dan status tiap produk</small></h1>
   <div class="row">
-    <button class="btn ghost sm" id="st" title="Klik untuk muat ulang dari Google Sheets">Mode lokal</button>
+    <button class="btn ghost sm" id="st" title="Klik untuk sinkron sekarang (otomatis tiap 10 menit)">Mode lokal</button>
     <button class="btn ghost sm" id="cfgb">Sinkronisasi Sheets</button>
     <button class="btn ghost sm" id="csv">Export CSV</button>
     <button class="btn ghost sm" id="bak">Backup JSON</button>
@@ -91,20 +91,27 @@ let cfg={},canPush=false,pt=null;
 try{cfg=JSON.parse(localStorage.getItem(CK)||'{}')}catch(e){}
 const st=(t,c)=>{const e=$('#st');e.textContent=t;e.style.color=c||''};
 const local=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
-const save=()=>{local();if(!cfg.url)return;if(canPush){st('Menyimpan...');clearTimeout(pt);pt=setTimeout(push,800)}else st('Belum tersinkron, tersimpan lokal','var(--rev)')};
+const DK='hypospot_rnd_dirty';
+const dirty=v=>{try{v?localStorage.setItem(DK,'1'):localStorage.removeItem(DK)}catch(e){}};
+const isDirty=()=>{try{return !!localStorage.getItem(DK)}catch(e){return false}};
+const msg=e=>e instanceof SyntaxError?'Google membalas halaman error, bukan data':(e.message||'Gagal');
+let busy=false;
+const save=()=>{local();if(!cfg.url)return;dirty(true);st('Perubahan belum disinkron (otomatis tiap 10 menit)','var(--rev)')};
 async function push(){
   try{const r=await fetch(cfg.url,{method:'POST',body:JSON.stringify({action:'save',token:cfg.token,data:S})});const j=await r.json();if(!j.ok)throw new Error(j.error);
-  st('Tersinkron '+new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),'var(--ok)')}
-  catch(e){st('Gagal sinkron, tersimpan lokal','var(--bad)')}
+  dirty(false);st('Tersinkron '+new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),'var(--ok)')}
+  catch(e){st(msg(e)+', tersimpan lokal','var(--bad)')}
 }
 async function pull(){
   if(!cfg.url){st('Mode lokal');return}
-  st('Memuat...');
+  if(busy)return;busy=true;
+  st('Menyinkronkan...');
   try{const r=await fetch(cfg.url+'?action=load&token='+encodeURIComponent(cfg.token||''));const j=await r.json();if(!j.ok)throw new Error(j.error);
   const d=j.data;
-  if(!d.products.length&&!d.logs.length&&(S.products.length||S.logs.length)){canPush=true;await push()}
-  else{S=d;local();canPush=true;st('Tersinkron','var(--ok)');render()}}
-  catch(e){canPush=false;st((e.message||'Gagal')+' (mode lokal)','var(--bad)')}
+  if(isDirty()||(!d.products.length&&!d.logs.length&&(S.products.length||S.logs.length))){canPush=true;await push()}
+  else{S=d;local();canPush=true;st('Tersinkron '+new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),'var(--ok)');render()}}
+  catch(e){canPush=false;st(msg(e)+' (mode lokal)','var(--bad)')}
+  finally{busy=false}
 }
 function openCfg(){
   form('Sinkronisasi Google Sheets',[
@@ -244,7 +251,7 @@ $('#imp').onclick=()=>$('#file').click();
 $('#file').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.products||!d.logs)throw 0;S=d;save();render()}catch(x){alert('File tidak valid. Gunakan file hasil Backup JSON dari aplikasi ini.')}};r.readAsText(f);e.target.value=''};
 $('#cfgb').onclick=openCfg;
 $('#st').onclick=pull;
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&cfg.url&&canPush&&!$('#dlg').open)pull()});
+setInterval(()=>{if(cfg.url&&!$('#dlg').open)pull()},10*60*1000);
 render();
 pull();
 </script>
