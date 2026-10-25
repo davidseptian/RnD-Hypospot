@@ -64,6 +64,7 @@ select{appearance:auto}
   <h1>Hypospot R&amp;D Pipeline<small>Riwayat, percobaan, dan status tiap produk</small></h1>
   <div class="row">
     <button class="btn ghost sm" id="st" title="Klik untuk sinkron sekarang (otomatis tiap 10 menit)">Mode lokal</button>
+    <button class="btn ghost sm" id="pulb">Tarik dari Sheet</button>
     <button class="btn ghost sm" id="cfgb">Sinkronisasi Sheets</button>
     <button class="btn ghost sm" id="csv">Export CSV</button>
     <button class="btn ghost sm" id="bak">Backup JSON</button>
@@ -249,6 +250,68 @@ $('#csv').onclick=()=>{
 };
 $('#imp').onclick=()=>$('#file').click();
 $('#file').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.products||!d.logs)throw 0;S=d;save();render()}catch(x){alert('File tidak valid. Gunakan file hasil Backup JSON dari aplikasi ini.')}};r.readAsText(f);e.target.value=''};
+const FLD=[
+ {k:'produk',l:'Nama produk (wajib)',a:['produk','nama produk','product','nama','item','sku']},
+ {k:'ver',l:'Versi / percobaan',a:['versi','version','percobaan','batch','kode']},
+ {k:'date',l:'Tanggal',a:['tanggal','tgl','date']},
+ {k:'type',l:'Jenis',a:['jenis','tipe','type']},
+ {k:'goal',l:'Tujuan / hipotesis',a:['tujuan','hipotesis','goal']},
+ {k:'what',l:'Bahan dan takaran',a:['bahan','komposisi','formula','takaran']},
+ {k:'result',l:'Hasil (berhasil/gagal/revisi)',a:['hasil','result','status']},
+ {k:'why',l:'Detail hasil / catatan',a:['detail','catatan','alasan','keterangan','note']},
+ {k:'score',l:'Skor',a:['skor','score','nilai']},
+ {k:'cost',l:'Biaya',a:['biaya','cost','hpp']},
+ {k:'next',l:'Keputusan berikutnya',a:['berikutnya','next','tindak lanjut','rencana']},
+ {k:'stage',l:'Tahap produk',a:['tahap','stage','fase']}
+];
+const guess=(h,f)=>{const n=h.map(x=>x.toLowerCase().trim());for(const a of f.a){const i=n.indexOf(a);if(i>=0)return 'c'+i}for(const a of f.a){const i=n.findIndex(x=>x.includes(a));if(i>=0)return 'c'+i}return ''};
+const nres=v=>{v=String(v).toLowerCase();return /berhasil|sukses|lolos|bagus|success|\bok\b/.test(v)?'berhasil':/gagal|fail|ditolak|buruk/.test(v)?'gagal':'revisi'};
+const ndate=v=>{v=String(v).trim();let m=v.match(/^\d{4}-\d{2}-\d{2}/);if(m)return m[0];m=v.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);return m?m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0'):today()};
+const nsc=v=>{const n=parseFloat(String(v).replace(',','.'));return isNaN(n)?'':n};
+const ncost=v=>{const n=parseFloat(String(v).replace(/[^\d,-]/g,'').replace(',','.'));return isNaN(n)?'':n};
+async function getJ(q){const r=await fetch(cfg.url+'?token='+encodeURIComponent(cfg.token||'')+'&'+q);const j=await r.json();if(!j.ok)throw new Error(j.error);return j}
+async function pullSheet(){
+  if(!cfg.url){alert('Isi dulu pengaturan Sinkronisasi Sheets.');return}
+  const was=isDirty();
+  try{
+    st('Membaca daftar tab...');
+    const t=(await getJ('action=tabs')).tabs;
+    if(!t.length){alert('Tidak ada tab lain di spreadsheet ini selain Produk dan Log.');return}
+    form('Tarik data dari Sheet',[{k:'tab',l:'Pilih tab sumber',t:'select',o:t}],{},d=>setTimeout(()=>{dirty(was);mapTab(d.tab)},0));
+  }catch(e){st(msg(e),'var(--bad)')}
+}
+async function mapTab(tab){
+  try{
+    st('Membaca tab '+tab+'...');
+    const j=await getJ('action=raw&tab='+encodeURIComponent(tab));
+    if(!j.rows.length){alert('Tab "'+tab+'" kosong.');return}
+    const o=[{v:'',l:'- tidak dipakai -'},...j.headers.map((h,i)=>({v:'c'+i,l:h||'Kolom '+(i+1)}))];
+    const v={};FLD.forEach(f=>v[f.k]=guess(j.headers,f));
+    st('Cocokkan kolom','var(--rev)');
+    form('Cocokkan kolom ('+j.rows.length+' baris)',FLD.map(f=>({k:f.k,l:f.l,t:'select',o})),v,d=>setTimeout(()=>doImport(tab,j.rows,d),0));
+  }catch(e){st(msg(e),'var(--bad)')}
+}
+function doImport(tn,rows,m){
+  if(!m.produk){alert('Kolom nama produk wajib dipilih.');return}
+  const g=(r,k)=>m[k]?(r[+m[k].slice(1)]??''):'';
+  let np=0,nl=0;
+  rows.forEach((r,i)=>{
+    const name=String(g(r,'produk')).trim();if(!name)return;
+    const key=tn+':'+(i+2);if(S.logs.some(l=>l.src==key))return;
+    let p=S.products.find(x=>x.name.toLowerCase()==name.toLowerCase());
+    if(!p){const sg=String(g(r,'stage')).toLowerCase().trim();
+      const stg=STAGES.find(s=>sg&&(sg.includes(s.toLowerCase())||s.toLowerCase().includes(sg)))||'Riset formula';
+      p={id:uid(),name,stage:stg,goal:'',sd:today(),created:today(),hist:[{stage:stg,date:today()}]};S.products.push(p);np++}
+    const tp=String(g(r,'type')).toLowerCase().trim();
+    S.logs.push({id:uid(),pid:p.id,src:key,date:ndate(g(r,'date')),ver:String(g(r,'ver')).trim()||'v'+(S.logs.filter(x=>x.pid==p.id).length+1),
+      type:TYPES.find(t=>t.toLowerCase()==tp)||'Riset formula',goal:g(r,'goal'),what:g(r,'what'),result:nres(g(r,'result')),
+      why:g(r,'why'),score:nsc(g(r,'score')),cost:ncost(g(r,'cost')),next:g(r,'next')});nl++;
+  });
+  dirty(true);local();tab='dash';render();
+  st('Impor selesai, belum disinkron','var(--rev)');
+  alert('Selesai: '+np+' produk baru dan '+nl+' percobaan diimpor dari tab "'+tn+'".');
+}
+$('#pulb').onclick=pullSheet;
 $('#cfgb').onclick=openCfg;
 $('#st').onclick=pull;
 setInterval(()=>{if(cfg.url&&!$('#dlg').open)pull()},10*60*1000);
